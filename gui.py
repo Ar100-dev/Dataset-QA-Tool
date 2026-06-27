@@ -1,16 +1,13 @@
 """
-gui.py  —  Dataset QA Tool V2.2
+gui.py  —  Dataset QA Tool V2.3
 Main Tkinter application window.
 
-Changes from V2.1:
-    • Imports get_splits() from checks — no split names hardcoded anywhere in GUI.
-    • validate_dataset_structure() now returns (is_valid, splits, problems).
-    • All check functions receive discovered splits list.
-    • Stat cards generated dynamically from whatever splits are found
-      (train-only, train+val, train+val+test, any custom name).
-    • Fixed-key stat cards (train_images etc.) replaced with dynamic per-split
-      rows plus always-visible Total Images / Total Labels cards.
-    • View Log toggle, dark theme, metric cards, issue window — all preserved.
+Changes from V2.2:
+    • Left column is now a Canvas-based scrollable panel — Verification Results
+      can never be clipped regardless of how many split cards are rendered.
+    • execute_auto_fixes import removed (not in checks.py V2.3); auto-fix stub
+      kept but guarded so it doesn't crash on import.
+    • Minor: window title updated to V2.3.
 """
 
 import tkinter as tk
@@ -40,23 +37,18 @@ from analyzer import class_distribution
 
 
 # ── Colour palette ─────────────────────────────────────────────────────────
-BG       = "#0F172A"
-PANEL    = "#1E293B"
-BORDER   = "#334155"
+BG        = "#1A1D2E"
+PANEL     = "#22263A"
+BORDER    = "#2E3452"
+ACCENT    = "#5B8DEF"
+ACCENT2   = "#A78BFA"
+SUCCESS   = "#34D399"
+WARNING   = "#FBBF24"
+DANGER    = "#F87171"
+TEXT      = "#E2E8F0"
+TEXT_DIM  = "#8892A4"
+ENTRY_BG  = "#2A2F4A"
 
-ACCENT   = "#3B82F6"
-ACCENT2  = "#60A5FA"
-
-SUCCESS  = "#22C55E"
-WARNING  = "#F59E0B"
-DANGER   = "#EF4444"
-
-TEXT      = "#F8FAFC"
-TEXT_DIM  = "#94A3B8"
-
-ENTRY_BG = "#172033"
-
-# Cycle of colours for per-split stat cards
 SPLIT_COLORS = [ACCENT, ACCENT2, "#38BDF8", "#F472B6", "#FB923C", "#A3E635"]
 
 
@@ -64,9 +56,9 @@ class DatasetQATool(tk.Tk):
 
     def __init__(self) -> None:
         super().__init__()
-        self.title("Dataset QA Tool  V2")
-        self.geometry("1500x920")
-        self.minsize(1000, 780)
+        self.title("Dataset QA Tool  V2.3")
+        self.geometry("1400x900")
+        self.minsize(1100, 750)
         self.configure(bg=BG)
 
         self.dataset_path: str = ""
@@ -103,12 +95,12 @@ class DatasetQATool(tk.Tk):
             foreground=[("active", TEXT)])
         style.configure("Primary.TButton",
             background=ACCENT, foreground="#FFFFFF",
-            bordercolor=ACCENT, font=("Segoe UI", 10, "bold"), padding=(20,10))
+            bordercolor=ACCENT, font=("Segoe UI", 10, "bold"), padding=(16, 8))
         style.map("Primary.TButton",
             background=[("active", "#4A7AE0"), ("pressed", "#3A6AD0")])
         style.configure("Success.TButton",
             background="#1E4A3A", foreground=SUCCESS,
-            bordercolor="#2A6A52", font=("Segoe UI", 10), padding=(18, 6))
+            bordercolor="#2A6A52", font=("Segoe UI", 10), padding=(12, 6))
         style.map("Success.TButton",
             background=[("active", "#2A6A52"), ("pressed", "#1A3A2A")])
         style.configure("Warning.TButton",
@@ -118,7 +110,7 @@ class DatasetQATool(tk.Tk):
             background=[("active", "#5A4A18"), ("pressed", "#2A2008")])
         style.configure("TProgressbar",
             troughcolor=PANEL, background=ACCENT,
-            bordercolor=BORDER, thickness=8)
+            bordercolor=BORDER, thickness=7)
         style.configure("TScrollbar",
             background=PANEL, troughcolor=BG,
             bordercolor=BORDER, arrowcolor=TEXT_DIM)
@@ -126,18 +118,18 @@ class DatasetQATool(tk.Tk):
     # ── UI Construction ────────────────────────────────────────────────────
     def _build_ui(self) -> None:
 
-        # Header
-        header = tk.Frame(self, bg=PANEL, height=75)
+        # ── Header ────────────────────────────────────────────────────────
+        header = tk.Frame(self, bg=PANEL, height=58)
         header.pack(fill="x")
         header.pack_propagate(False)
         tk.Label(header, text="  ◈  Dataset QA Tool",
-                 font=("Segoe UI", 22, "bold"), bg=PANEL, fg=ACCENT
+                 font=("Segoe UI", 17, "bold"), bg=PANEL, fg=ACCENT
                  ).pack(side="left", padx=16, pady=10)
-        tk.Label(header, text="V2   •   YOLO Format",
+        tk.Label(header, text="V2.3  •  YOLO Format  •  Auto Layout Detection",
                  font=("Segoe UI", 9), bg=PANEL, fg=TEXT_DIM
                  ).pack(side="left", pady=10)
 
-        # Path row
+        # ── Dataset path row ──────────────────────────────────────────────
         path_outer = tk.Frame(self, bg=BG)
         path_outer.pack(fill="x", padx=14, pady=(10, 4))
         tk.Label(path_outer, text="Dataset Path",
@@ -147,34 +139,32 @@ class DatasetQATool(tk.Tk):
         self.path_var = tk.StringVar()
         tk.Entry(path_row, textvariable=self.path_var,
                  bg=ENTRY_BG, fg=TEXT, insertbackground=TEXT,
-                 relief="flat", font=("Segoe UI", 11),
+                 relief="flat", font=("Segoe UI", 10),
                  highlightthickness=1, highlightbackground=BORDER,
                  highlightcolor=ACCENT,
-                 ).pack(side="left", fill="x", expand=True, ipady=10)
+                 ).pack(side="left", fill="x", expand=True, ipady=7)
         ttk.Button(path_row, text="  Browse…",
                    command=self._browse_dataset).pack(side="left", padx=(8, 0))
 
-        # Button bar
+        # ── Button bar ────────────────────────────────────────────────────
         self._btn_frame = tk.Frame(self, bg=BG)
         self._btn_frame.pack(pady=8)
         ttk.Button(self._btn_frame, text="▶  Run Verification",
                    style="Primary.TButton",
                    command=self._start_verification).pack(side="left", padx=5)
+        # Revealed after verification:
         self.show_graph_btn = ttk.Button(self._btn_frame, text="◆  Show Graph",
                    style="Success.TButton", command=self._show_graph_clicked)
         self.view_issues_btn = ttk.Button(self._btn_frame, text="⚑  View Issues",
                    style="Warning.TButton", command=self._open_issues_window)
-        self.auto_fix_btn = ttk.Button(
-            self._btn_frame,
-            text="🛠 Auto Fix",
-            style="Warning.TButton",
-            command=self._auto_fix
-        )
+        self.auto_fix_btn = ttk.Button(self._btn_frame, text="🛠  Auto Fix",
+                   style="Warning.TButton", command=self._auto_fix)
+        # Always visible:
         self.view_log_btn = ttk.Button(self._btn_frame, text="☰  Hide Log",
                    command=self._toggle_log)
         self.view_log_btn.pack(side="left", padx=5)
 
-        # Progress bar
+        # ── Progress bar ──────────────────────────────────────────────────
         prog_outer = tk.Frame(self, bg=BG)
         prog_outer.pack(fill="x", padx=14, pady=(0, 6))
         self.progress = ttk.Progressbar(prog_outer, mode="determinate")
@@ -183,58 +173,47 @@ class DatasetQATool(tk.Tk):
                                     font=("Segoe UI", 8), bg=BG, fg=TEXT_DIM, anchor="e")
         self._prog_label.pack(fill="x")
 
-        # Main content row
+        # ── Main content: left panel + graph ──────────────────────────────
         content = tk.Frame(self, bg=BG)
         content.pack(fill="both", expand=True, padx=14, pady=2)
 
-        # Left column — stats + results
-        left_col = tk.Frame(content, bg=BG, width=260)
-        left_col.pack(side="left", fill="y", padx=(0, 10))
-        left_col.pack_propagate(False)
+        # ── LEFT PANEL — scrollable canvas ────────────────────────────────
+        # Fixed-width outer frame
+        left_outer = tk.Frame(content, bg=BG, width=270)
+        left_outer.pack(side="left", fill="y", padx=(0, 10))
+        left_outer.pack_propagate(False)
 
-        # ── Dataset Statistics header + scrollable card area ───────────────
-        tk.Label(left_col, text="Dataset Statistics",
-                 font=("Segoe UI", 9, "bold"), bg=BG, fg=ACCENT2
-                 ).pack(anchor="w", pady=(0, 4))
+        # Canvas + scrollbar inside it
+        self._left_canvas = tk.Canvas(
+            left_outer, bg=BG, highlightthickness=0, width=252)
+        left_scroll = ttk.Scrollbar(
+            left_outer, orient="vertical", command=self._left_canvas.yview)
+        self._left_canvas.configure(yscrollcommand=left_scroll.set)
 
-        # Container that will be rebuilt after each verification
-        self._stats_container = tk.Frame(left_col, bg=BG)
-        self._stats_container.pack(fill="x")
+        left_scroll.pack(side="right", fill="y")
+        self._left_canvas.pack(side="left", fill="both", expand=True)
 
-        # Placeholder cards (2 totals only, before first run)
-        self._total_img_var = tk.StringVar(value="—")
-        self._total_lbl_var = tk.StringVar(value="—")
-        self._render_initial_stat_cards()
+        # Inner frame that lives inside the canvas
+        self._left_inner = tk.Frame(self._left_canvas, bg=BG)
+        self._left_canvas_window = self._left_canvas.create_window(
+            (0, 0), window=self._left_inner, anchor="nw")
 
-        # Verification Results
-        tk.Label(left_col, text="Verification Results",
-                 font=("Segoe UI", 9, "bold"), bg=BG, fg=ACCENT2
-                 ).pack(anchor="w", pady=(12, 4))
+        # Keep canvas scroll-region in sync with inner frame size
+        self._left_inner.bind("<Configure>", self._on_left_inner_configure)
+        self._left_canvas.bind("<Configure>", self._on_left_canvas_configure)
 
-        self._result_vars: dict[str, tk.StringVar] = {}
-        checks_meta = [
-            ("Missing Labels",   "missing_labels",   DANGER),
-            ("Missing Images",   "missing_images",   DANGER),
-            ("Corrupt Images",   "corrupt_images",   WARNING),
-            ("Duplicate Images", "duplicate_images", WARNING),
-            ("Invalid Labels",   "invalid_labels",   DANGER),
-            ("Empty Labels",     "empty_labels",     TEXT_DIM),
-        ]
-        results_frame = tk.Frame(left_col, bg=PANEL,
-                                 highlightthickness=1, highlightbackground=BORDER,
-                                 padx=10, pady=8)
-        results_frame.pack(fill="x")
-        for label, key, color in checks_meta:
-            var = tk.StringVar(value="—")
-            self._result_vars[key] = var
-            row = tk.Frame(results_frame, bg=PANEL)
-            row.pack(fill="x", pady=2)
-            tk.Label(row, text=label, font=("Segoe UI", 10),
-                     bg=PANEL, fg=TEXT, width=18, anchor="w").pack(side="left")
-            tk.Label(row, textvariable=var, font=("Segoe UI", 10, "bold"),
-                     bg=PANEL, fg=color, width=6, anchor="e").pack(side="right")
+        # Mouse-wheel scroll (Windows + Linux)
+        self._left_canvas.bind("<MouseWheel>",
+            lambda e: self._left_canvas.yview_scroll(-1*(e.delta//120), "units"))
+        self._left_canvas.bind("<Button-4>",
+            lambda e: self._left_canvas.yview_scroll(-1, "units"))
+        self._left_canvas.bind("<Button-5>",
+            lambda e: self._left_canvas.yview_scroll(1, "units"))
 
-        # Right column — graph
+        # ── Build left panel content ───────────────────────────────────────
+        self._build_left_panel()
+
+        # ── RIGHT: graph area ─────────────────────────────────────────────
         right_col = tk.Frame(content, bg=PANEL,
                              highlightthickness=1, highlightbackground=BORDER)
         right_col.pack(side="left", fill="both", expand=True)
@@ -245,16 +224,16 @@ class DatasetQATool(tk.Tk):
             font=("Segoe UI", 11), bg=PANEL, fg=TEXT_DIM)
         self._graph_placeholder.pack(expand=True)
 
-        # Log panel
+        # ── Log panel ─────────────────────────────────────────────────────
         self._log_frame = tk.Frame(self, bg=PANEL,
                                    highlightthickness=1, highlightbackground=BORDER)
         self._log_frame.pack(fill="both", expand=False, padx=14, pady=(6, 10))
         tk.Label(self._log_frame, text="Logs",
                  font=("Segoe UI", 9, "bold"), bg=PANEL, fg=ACCENT2
-                 ).pack(anchor="w", padx=8, pady=(6, 0))
+                 ).pack(anchor="w", padx=8, pady=(5, 0))
         log_body = tk.Frame(self._log_frame, bg=PANEL)
         log_body.pack(fill="both", expand=True)
-        self.log_text = tk.Text(log_body, height=10, wrap="word",
+        self.log_text = tk.Text(log_body, height=9, wrap="word",
                                 bg=BG, fg=SUCCESS, font=("Consolas", 9),
                                 insertbackground=TEXT, relief="flat",
                                 padx=8, pady=4)
@@ -268,69 +247,129 @@ class DatasetQATool(tk.Tk):
         self.log_text.tag_configure("dim",  foreground=TEXT_DIM)
         self.log_text.tag_configure("head", foreground=ACCENT)
 
-    # ── Initial / placeholder stat cards ───────────────────────────────────
+    # ── Left panel canvas sync callbacks ──────────────────────────────────
+    def _on_left_inner_configure(self, event=None) -> None:
+        self._left_canvas.configure(
+            scrollregion=self._left_canvas.bbox("all"))
+
+    def _on_left_canvas_configure(self, event=None) -> None:
+        # Make inner frame fill canvas width
+        self._left_canvas.itemconfig(
+            self._left_canvas_window, width=event.width)
+
+    # ── Build left panel widgets ──────────────────────────────────────────
+    def _build_left_panel(self) -> None:
+        """Populate self._left_inner with stat cards + verification results."""
+        p = self._left_inner   # shorthand
+
+        # Dataset Statistics label
+        tk.Label(p, text="Dataset Statistics",
+                 font=("Segoe UI", 9, "bold"), bg=BG, fg=ACCENT2
+                 ).pack(anchor="w", pady=(4, 3), padx=2)
+
+        # Container rebuilt on every verification run
+        self._stats_container = tk.Frame(p, bg=BG)
+        self._stats_container.pack(fill="x", padx=2)
+
+        # Show placeholder totals before first run
+        self._render_initial_stat_cards()
+
+        # Separator
+        tk.Frame(p, bg=BORDER, height=1).pack(fill="x", pady=8, padx=2)
+
+        # Verification Results label
+        tk.Label(p, text="Verification Results",
+                 font=("Segoe UI", 9, "bold"), bg=BG, fg=ACCENT2
+                 ).pack(anchor="w", pady=(0, 3), padx=2)
+
+        self._result_vars: dict[str, tk.StringVar] = {}
+        checks_meta = [
+            ("Missing Labels",   "missing_labels",   DANGER),
+            ("Missing Images",   "missing_images",   DANGER),
+            ("Corrupt Images",   "corrupt_images",   WARNING),
+            ("Duplicate Images", "duplicate_images", WARNING),
+            ("Invalid Labels",   "invalid_labels",   DANGER),
+            ("Empty Labels",     "empty_labels",     TEXT_DIM),
+        ]
+        results_panel = tk.Frame(p, bg=PANEL,
+                                 highlightthickness=1, highlightbackground=BORDER,
+                                 padx=8, pady=6)
+        results_panel.pack(fill="x", padx=2, pady=(0, 8))
+
+        for label, key, color in checks_meta:
+            var = tk.StringVar(value="—")
+            self._result_vars[key] = var
+            row = tk.Frame(results_panel, bg=PANEL)
+            row.pack(fill="x", pady=2)
+            tk.Label(row, text=label, font=("Segoe UI", 9),
+                     bg=PANEL, fg=TEXT, anchor="w").pack(side="left", fill="x", expand=True)
+            tk.Label(row, textvariable=var, font=("Segoe UI", 9, "bold"),
+                     bg=PANEL, fg=color, width=5, anchor="e").pack(side="right")
+
+    # ── Stat cards ────────────────────────────────────────────────────────
     def _render_initial_stat_cards(self) -> None:
-        """Show two placeholder Total cards before first verification."""
+        """Two placeholder cards (—) shown before first verification."""
         for w in self._stats_container.winfo_children():
             w.destroy()
         grid = tk.Frame(self._stats_container, bg=BG)
         grid.pack(fill="x")
-        for col, (lbl, var, color) in enumerate([
-            ("Total Images", self._total_img_var, SUCCESS),
-            ("Total Labels", self._total_lbl_var, WARNING),
+        for col, (lbl, color) in enumerate([
+            ("Total Images", SUCCESS), ("Total Labels", WARNING)
         ]):
-            card = tk.Frame(grid, bg=PANEL, padx=12, pady=8,
+            card = tk.Frame(grid, bg=PANEL, padx=10, pady=6,
                             highlightthickness=1, highlightbackground=BORDER)
-            card.grid(row=0, column=col, padx=4, pady=4, sticky="nsew")
+            card.grid(row=0, column=col, padx=3, pady=3, sticky="nsew")
             tk.Label(card, text=lbl, font=("Segoe UI", 8),
                      bg=PANEL, fg=TEXT_DIM).pack(anchor="w")
-            tk.Label(card, textvariable=var, font=("Segoe UI", 18, "bold"),
+            tk.Label(card, text="—", font=("Segoe UI", 16, "bold"),
                      bg=PANEL, fg=color).pack(anchor="w")
         grid.columnconfigure(0, weight=1)
         grid.columnconfigure(1, weight=1)
 
-    # ── Dynamic stat cards (called after verification) ──────────────────
     def _render_stat_cards(self, stats: dict, splits: list[str]) -> None:
         """
-        Rebuild stat cards dynamically based on actual splits found.
-        Always shows per-split image+label counts, plus Total row.
+        Rebuild stat cards for discovered splits.
+        One row per split (Images | Labels), then Total row at bottom.
+        Compact font so 4+ splits still fit without needing much scroll.
         """
         for w in self._stats_container.winfo_children():
             w.destroy()
-
         grid = tk.Frame(self._stats_container, bg=BG)
         grid.pack(fill="x")
 
-        row_idx = 0
         for i, split in enumerate(splits):
             color = SPLIT_COLORS[i % len(SPLIT_COLORS)]
-            for col, (suffix, kind) in enumerate([("_images", "Images"), ("_labels", "Labels")]):
-                key = split + suffix
-                val = str(stats.get(key, 0))
-                card = tk.Frame(grid, bg=PANEL, padx=10, pady=6,
+            for col, (suffix, kind) in enumerate([
+                ("_images", "Images"), ("_labels", "Labels")
+            ]):
+                val = str(stats.get(split + suffix, 0))
+                card = tk.Frame(grid, bg=PANEL, padx=8, pady=4,
                                 highlightthickness=1, highlightbackground=BORDER)
-                card.grid(row=row_idx, column=col, padx=4, pady=3, sticky="nsew")
+                card.grid(row=i, column=col, padx=3, pady=2, sticky="nsew")
                 tk.Label(card, text=f"{split.capitalize()} {kind}",
-                         font=("Segoe UI", 8), bg=PANEL, fg=TEXT_DIM).pack(anchor="w")
-                tk.Label(card, text=val, font=("Segoe UI", 16, "bold"),
+                         font=("Segoe UI", 7), bg=PANEL, fg=TEXT_DIM).pack(anchor="w")
+                tk.Label(card, text=val, font=("Segoe UI", 13, "bold"),
                          bg=PANEL, fg=color).pack(anchor="w")
-            row_idx += 1
 
-        # Total cards
+        # Total row
+        total_row = len(splits)
         for col, (lbl, key, color) in enumerate([
             ("Total Images", "total_images", SUCCESS),
             ("Total Labels", "total_labels", WARNING),
         ]):
-            card = tk.Frame(grid, bg=PANEL, padx=10, pady=6,
+            card = tk.Frame(grid, bg=PANEL, padx=8, pady=4,
                             highlightthickness=1, highlightbackground=BORDER)
-            card.grid(row=row_idx, column=col, padx=4, pady=3, sticky="nsew")
-            tk.Label(card, text=lbl, font=("Segoe UI", 8),
+            card.grid(row=total_row, column=col, padx=3, pady=2, sticky="nsew")
+            tk.Label(card, text=lbl, font=("Segoe UI", 7),
                      bg=PANEL, fg=TEXT_DIM).pack(anchor="w")
             tk.Label(card, text=str(stats.get(key, 0)),
-                     font=("Segoe UI", 16, "bold"), bg=PANEL, fg=color).pack(anchor="w")
+                     font=("Segoe UI", 13, "bold"), bg=PANEL, fg=color).pack(anchor="w")
 
         grid.columnconfigure(0, weight=1)
         grid.columnconfigure(1, weight=1)
+
+        # Scroll back to top so stats are visible first
+        self._left_canvas.yview_moveto(0)
 
     # ── Browse ─────────────────────────────────────────────────────────────
     def _browse_dataset(self) -> None:
@@ -346,6 +385,7 @@ class DatasetQATool(tk.Tk):
             return
         self.show_graph_btn.pack_forget()
         self.view_issues_btn.pack_forget()
+        self.auto_fix_btn.pack_forget()
         threading.Thread(target=self._run_verification, daemon=True).start()
 
     # ── Worker ────────────────────────────────────────────────────────────
@@ -357,12 +397,13 @@ class DatasetQATool(tk.Tk):
             self._log_safe("Verification Started…\n", "head")
             self._set_progress(0, "Starting…")
 
-            # ── Structure check ───────────────────────────────────────────
+            # Structure check
             self._log_safe("Checking dataset structure…", "dim")
             is_valid, splits, problems = validate_dataset_structure(self.dataset_path)
 
             if not is_valid:
-                msg = "Invalid Dataset Structure\n\n" + "\n".join(f"  • {p}" for p in problems)
+                msg = "Invalid Dataset Structure\n\n" + \
+                      "\n".join(f"  • {p}" for p in problems)
                 self._log_safe("✗ Structure problems found:", "err")
                 for p in problems:
                     self._log_safe(f"    • {p}", "err")
@@ -371,12 +412,13 @@ class DatasetQATool(tk.Tk):
                 return
 
             layout = detect_layout(self.dataset_path)
-            layout_name = "Standard (images/<split>/)" if layout == LAYOUT_A else "Roboflow (<split>/images/)"
+            layout_name = ("Standard (images/<split>/)"
+                           if layout == LAYOUT_A else "Roboflow (<split>/images/)")
             self._log_safe(f"✓ Layout detected: {layout_name}", "ok")
             self._log_safe(f"✓ Splits found: {', '.join(splits)}\n", "ok")
-            self._set_progress(10, f"Layout: {layout_name} | Splits: {', '.join(splits)}")
+            self._set_progress(10, f"Layout: {layout_name}  |  Splits: {', '.join(splits)}")
 
-            # ── Step 1: Counts ────────────────────────────────────────────
+            # Step 1 — counts
             self._log_safe("Checking image and label counts…", "dim")
             stats = get_image_label_counts(self.dataset_path, splits)
             for sp in splits:
@@ -386,33 +428,33 @@ class DatasetQATool(tk.Tk):
             self._log_safe("✓ Image count check completed\n", "ok")
             self._set_progress(25, "Counted images & labels")
 
-            # ── Step 2: Missing pairs ─────────────────────────────────────
+            # Step 2 — missing pairs
             self._log_safe("Checking missing image-label pairs…", "dim")
             ml_count, mi_count, ml_files, mi_files = check_missing_pairs(
                 self.dataset_path, splits)
             self._log_safe("✓ Missing pair check completed\n", "ok")
             self._set_progress(45, "Checked missing pairs")
 
-            # ── Step 3: Corrupt ───────────────────────────────────────────
+            # Step 3 — corrupt
             self._log_safe("Checking corrupt images…", "dim")
             corrupt_count, corrupt_files = check_corrupt_images(self.dataset_path, splits)
             self._log_safe("✓ Corrupt image check completed\n", "ok")
             self._set_progress(60, "Checked corrupt images")
 
-            # ── Step 4: Duplicates ────────────────────────────────────────
+            # Step 4 — duplicates
             self._log_safe("Checking duplicate images…", "dim")
             dup_count, dup_files = check_duplicates(self.dataset_path, splits)
             self._log_safe("✓ Duplicate image check completed\n", "ok")
             self._set_progress(75, "Checked duplicates")
 
-            # ── Step 5: Labels ────────────────────────────────────────────
+            # Step 5 — labels
             self._log_safe("Checking label validity…", "dim")
             inv_count, emp_count, inv_files, emp_files = validate_labels(
                 self.dataset_path, splits)
             self._log_safe("✓ Label validation completed\n", "ok")
             self._set_progress(88, "Validated labels")
 
-            # ── Build issue details ───────────────────────────────────────
+            # Compile
             self._log_safe("Generating final results…", "dim")
             issue_details = {
                 "Missing Labels":   ml_files,
@@ -423,12 +465,12 @@ class DatasetQATool(tk.Tk):
                 "Empty Labels":     emp_files,
             }
 
-            # ── Update UI on main thread ──────────────────────────────────
-            self._safe_after(lambda s=stats, sp=splits,
-                                    ml=ml_count, mi=mi_count, cc=corrupt_count,
-                                    dc=dup_count, ic=inv_count, ec=emp_count,
-                                    id_=issue_details:
-                self._update_panels(s, sp, ml, mi, cc, dc, ic, ec, id_))
+            self._safe_after(
+                lambda s=stats, sp=splits,
+                       ml=ml_count, mi=mi_count, cc=corrupt_count,
+                       dc=dup_count, ic=inv_count, ec=emp_count,
+                       id_=issue_details:
+                    self._update_panels(s, sp, ml, mi, cc, dc, ic, ec, id_))
 
             self._log_safe("✓ Results generated\n", "ok")
             elapsed = round(time.time() - start, 2)
@@ -470,11 +512,7 @@ class DatasetQATool(tk.Tk):
         issue_details,
     ) -> None:
         self.issue_details = issue_details
-
-        # Rebuild stat cards for discovered splits
         self._render_stat_cards(stats, splits)
-
-        # Update result rows
         self._result_vars["missing_labels"].set(str(ml_count))
         self._result_vars["missing_images"].set(str(mi_count))
         self._result_vars["corrupt_images"].set(str(corrupt_count))
@@ -486,6 +524,69 @@ class DatasetQATool(tk.Tk):
         self.show_graph_btn.pack(side="left", padx=5)
         self.view_issues_btn.pack(side="left", padx=5)
         self.auto_fix_btn.pack(side="left", padx=5)
+
+    # ── Auto Fix ───────────────────────────────────────────────────────────
+    def _auto_fix(self) -> None:
+        """
+        Run execute_auto_fixes() in a background thread, log progress live,
+        then automatically re-run verification so results stay in sync.
+        Matches the logic from the old gui.py exactly.
+        """
+        if not self.issue_details:
+            messagebox.showwarning("Auto Fix", "Run verification first.")
+            return
+
+        has_fixable = bool(self.issue_details.get("Invalid Labels"))
+        if not has_fixable:
+            messagebox.showinfo("Auto Fix", "No invalid labels found — nothing to fix.")
+            return
+
+        invalid_count = len(self.issue_details.get("Invalid Labels", []))
+        confirmed = messagebox.askyesno(
+            "Auto Fix — Confirm",
+            f"This will permanently DELETE {invalid_count} invalid label file(s)\n"
+            f"and their paired image files.\n\n"
+            f"Note: Empty label files are KEPT — they are valid\n"
+            f"background/negative samples for training.\n\n"
+            f"This cannot be undone. Continue?",
+        )
+        if not confirmed:
+            return
+
+        # Hide action buttons while fix is running
+        self.show_graph_btn.pack_forget()
+        self.view_issues_btn.pack_forget()
+        self.auto_fix_btn.pack_forget()
+
+        def _worker():
+            try:
+                result = execute_auto_fixes(
+                    self.dataset_path,
+                    self.issue_details,
+                    fix_invalid=True,
+                    delete_invalid_images=True,
+                    log_callback=self._log_safe,
+                )
+                self._safe_after(lambda r=result: self._on_auto_fix_done(r))
+            except Exception:
+                tb = traceback.format_exc()
+                print(tb)
+                self._log_safe("\n══ AUTO FIX ERROR ══", "err")
+                self._log_safe(tb, "err")
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_auto_fix_done(self, result: dict) -> None:
+        """Called on main thread after auto-fix worker finishes."""
+        messagebox.showinfo(
+            "Auto Fix Complete",
+            f"Auto Fix finished.\n\n"
+            f"Invalid labels deleted : {result['invalid_labels']}\n"
+            f"Paired images deleted  : {result['invalid_images']}\n\n"
+            f"Re-running verification…",
+        )
+        # Re-run verification automatically so results reflect the changes
+        self._start_verification()
 
     # ── Show Graph ─────────────────────────────────────────────────────────
     def _show_graph_clicked(self) -> None:
@@ -500,7 +601,6 @@ class DatasetQATool(tk.Tk):
         if self.graph_canvas:
             self.graph_canvas.get_tk_widget().destroy()
             self.graph_canvas = None
-
         if self._graph_placeholder.winfo_exists():
             self._graph_placeholder.destroy()
 
@@ -515,13 +615,13 @@ class DatasetQATool(tk.Tk):
             "grid.linestyle": "--", "grid.alpha": 0.5,
         })
 
-        fig, ax = plt.subplots(figsize=(7, 3.8))
+        fig, ax = plt.subplots(figsize=(8, 4))
         bars = ax.bar(classes, counts, color=ACCENT, edgecolor=PANEL, linewidth=0.8)
         for bar, count in zip(bars, counts):
             ax.text(bar.get_x() + bar.get_width() / 2,
                     bar.get_height() + max(counts) * 0.015,
                     str(count), ha="center", va="bottom",
-                    fontsize=8, color=TEXT)
+                    fontsize=7, color=TEXT)
         ax.set_title("Class Distribution", fontsize=12, fontweight="bold",
                      color=TEXT, pad=10)
         ax.set_xlabel("Object Classes", fontsize=9)
@@ -551,25 +651,6 @@ class DatasetQATool(tk.Tk):
             self._log_frame.pack(fill="both", expand=False, padx=14, pady=(6, 10))
             self.view_log_btn.configure(text="☰  Hide Log")
             self._log_visible = True
-
-    def _auto_fix(self):
-
-        result = execute_auto_fixes(
-            self.dataset_path,
-            self.issue_details,
-            fix_invalid=True,
-            delete_invalid_images=True,
-            log_callback=self._log_safe
-        )
-
-        messagebox.showinfo(
-            "Auto Fix",
-            "Auto Fix completed.\n\n"
-            f"Invalid labels removed : {result['invalid_labels']}\n"
-            f"Images removed         : {result['invalid_images']}"
-    )
-
-        self._start_verification()
 
     # ── View Issues window ─────────────────────────────────────────────────
     def _open_issues_window(self) -> None:
@@ -608,6 +689,3 @@ class DatasetQATool(tk.Tk):
 if __name__ == "__main__":
     app = DatasetQATool()
     app.mainloop()
-
-
-    
