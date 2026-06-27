@@ -349,85 +349,111 @@ def validate_labels(
 
     return (len(invalid_files), len(empty_files), invalid_files, empty_files)
 
+
 # ══════════════════════════════════════════════════════════════════════════════
-#  Auto Fix Execution Logic (V3.0)
+#  Auto Fix
 # ══════════════════════════════════════════════════════════════════════════════
 
 def execute_auto_fixes(
     dataset_path: str,
     issue_details: dict[str, list[str]],
-    fix_invalid: bool,
-    delete_invalid_images: bool,
-    log_callback
+    fix_invalid: bool = True,
+    delete_invalid_images: bool = True,
+    log_callback=None,
 ) -> dict[str, int]:
     """
-    Executes selected dataset fixes using layout-agnostic absolute paths.
-    Invokes log_callback(message, tag) for real-time reporting.
-    Returns counts of deleted items.
+    Automatically fix dataset issues — ONLY targets "Invalid Labels".
+    Empty Labels are intentionally skipped: blank label files are valid
+    negative/background training samples.
+
+    Entry format in issue_details:  "<split>/<filename.txt>"
+    (the filename includes the .txt extension as stored by validate_labels).
+
+    What is fixed
+    ─────────────
+    "Invalid Labels"
+        • Label file is deleted from the resolved lbl_dir.
+        • If delete_invalid_images=True, the paired image (same stem,
+          any supported extension) is also deleted from img_dir.
+
+    NOT touched
+        • Empty Labels     — valid background samples, kept intentionally.
+        • Missing pairs    — cannot auto-create content.
+        • Corrupt Images   — destructive without manual review.
+        • Duplicates       — user must choose which copy to keep.
+
+    Returns
+    ───────
+    {"invalid_labels": <count deleted>, "invalid_images": <count deleted>}
     """
-    deleted_counts = {
-        "invalid_labels": 0,
-        "invalid_images": 0,
-        "duplicate_images": 0,
-        "empty_labels": 0
-    }
-    
 
+    def _log(text: str, tag: str = "dim") -> None:
+        if log_callback:
+            log_callback(text, tag)
+        print(text)
 
-    # Helper to split "split/filename.ext" safely into absolute paths
-    def get_abs_paths(file_entry: str, is_label: bool = False) -> tuple[str, str, str]:
-        parts = file_entry.split("/", 1)
+    labels_deleted = 0
+    images_deleted = 0
+
+    if not fix_invalid:
+        _log("Auto Fix: nothing to do (fix_invalid=False).", "warn")
+        return {"invalid_labels": 0, "invalid_images": 0}
+
+    # Only fix Invalid Labels — Empty Labels are intentionally preserved
+    invalid_entries: list[str] = issue_details.get("Invalid Labels", [])
+
+    if not invalid_entries:
+        _log("Auto Fix: no invalid labels found — nothing to delete.", "ok")
+        return {"invalid_labels": 0, "invalid_images": 0}
+
+    _log(f"\nAuto Fix: processing {len(invalid_entries)} invalid label file(s)…", "head")
+
+    for entry in invalid_entries:
+        # entry format: "<split>/<filename.txt>"  — filename INCLUDES .txt
+        parts = entry.split("/", 1)
         if len(parts) != 2:
-            return "", "", ""
-        split, filename = parts
+            _log(f"  ✗ Skipping unrecognised entry: {entry}", "warn")
+            continue
+
+        split, filename = parts                   # e.g. "train", "image001.txt"
+        stem = os.path.splitext(filename)[0]      # e.g. "image001"
         img_dir, lbl_dir = resolve_split_dirs(dataset_path, split)
-        target_dir = lbl_dir if is_label else img_dir
-        return os.path.abspath(os.path.join(target_dir, filename)), split, os.path.splitext(filename)[0]
 
-    # 1. Fix Invalid Labels & Corresponding Images
-    if fix_invalid and issue_details.get("Invalid Labels"):
-        for entry in issue_details["Invalid Labels"]:
-            lbl_path, split, stem = get_abs_paths(entry, is_label=True)
-            if lbl_path and os.path.isfile(lbl_path):
-                try:
-                    os.remove(lbl_path)
-                    log_callback(f"Deleted invalid label: {entry}", "err")
-                    deleted_counts["invalid_labels"] += 1
-                except Exception as e:
-                    log_callback(f"Failed to delete label {lbl_path}: {e}", "warn")
+        # ── Delete label file ─────────────────────────────────────────────
+        lbl_path = os.path.join(lbl_dir, filename)   # filename already has .txt
+        if os.path.isfile(lbl_path):
+            try:
+                os.remove(lbl_path)
+                labels_deleted += 1
+                _log(f"  ✓ Deleted label  : {split}/{filename}", "ok")
+            except Exception as e:
+                _log(f"  ✗ Cannot delete label {lbl_path}: {e}", "err")
+        else:
+            _log(f"  ⚠ Label not found (already deleted?): {lbl_path}", "warn")
 
-            # Hunt and delete corresponding image across all valid extensions
-            if delete_invalid_images:
+        # ── Delete paired image ───────────────────────────────────────────
+        if delete_invalid_images:
+            deleted_img = False
+            for ext in IMAGE_EXTENSIONS:
+                img_path = os.path.join(img_dir, stem + ext)
+                if os.path.isfile(img_path):
+                    try:
+                        os.remove(img_path)
+                        images_deleted += 1
+                        _log(f"  ✓ Deleted image  : {split}/{stem}{ext}", "ok")
+                        deleted_img = True
+                        break
+                    except Exception as e:
+                        _log(f"  ✗ Cannot delete image {img_path}: {e}", "err")
+                        break
+            if not deleted_img:
+                _log(f"  ⚠ No paired image for stem: {split}/{stem}", "warn")
 
-                img_dir, _ = resolve_split_dirs(dataset_path, split)
+    _log(
+        f"\nAuto Fix complete — "
+        f"{labels_deleted} label(s) deleted, "
+        f"{images_deleted} image(s) deleted.",
+        "head",
+    )
 
-                if os.path.isdir(img_dir):
-
-                    for ext in IMAGE_EXTENSIONS:
-
-                        img_path = os.path.abspath(
-                            os.path.join(img_dir, f"{stem}{ext}")
-                        )
-
-                        if os.path.isfile(img_path):
-
-                            try:
-                                os.remove(img_path)
-
-                                log_callback(
-                                    f"Deleted matching image: {split}/{stem}{ext}",
-                                    "err"
-                                )
-
-                                deleted_counts["invalid_images"] += 1
-
-                            except Exception as e:
-
-                                log_callback(
-                                    f"Failed to delete image {img_path}: {e}",
-                                    "warn"
-                                )
-
-        return deleted_counts
-
-                
+    return {"invalid_labels": labels_deleted, "invalid_images": images_deleted}
